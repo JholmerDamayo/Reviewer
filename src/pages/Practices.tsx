@@ -9,6 +9,7 @@ import {
 } from 'react';
 import Modal from '../components/Modal';
 import { useAuth } from '../context/AuthContext';
+import { generateAnswersWithGemini } from '../lib/gemini';
 import {
   flattenPracticeTopics,
   getPracticeWorkspace,
@@ -447,6 +448,7 @@ function Practices() {
   const [saveValidationMessage, setSaveValidationMessage] = useState('');
   const [invalidAnswerQuestionIds, setInvalidAnswerQuestionIds] = useState<number[]>([]);
   const [isPracticeLoading, setIsPracticeLoading] = useState(false);
+  const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
   const [practiceStatus, setPracticeStatus] = useState('');
   const [openTopicMenuId, setOpenTopicMenuId] = useState<number | null>(null);
   const [openQuizMenuId, setOpenQuizMenuId] = useState<number | null>(null);
@@ -1355,10 +1357,10 @@ function Practices() {
       return;
     }
 
-    handleConfirmAiAnswerAssist();
+    void handleConfirmAiAnswerAssist();
   }
 
-  function handleConfirmAiAnswerAssist() {
+  async function handleConfirmAiAnswerAssist() {
     if (!pendingSaveQuestions?.length) {
       setShowAnswerAssistModal(false);
       setAnswerAssistStep('select');
@@ -1369,47 +1371,98 @@ function Practices() {
       answerAssistTrigger === 'scan'
         ? answerAssistQuestionScope ?? pendingSaveQuestions.length
         : pendingSaveQuestions.length;
-    const generatedQuestions = pendingSaveQuestions.map((question, index) =>
-      index >= scopedQuestionCount || question.answer.trim()
-        ? question
-        : {
-            ...question,
-            answer: inferAnswerForQuestion(question)
-          }
-    );
-    const unansweredBeforeGeneration = pendingSaveQuestions
+    const unansweredQuestions = pendingSaveQuestions
       .slice(0, scopedQuestionCount)
-      .filter((question) => !question.answer.trim()).length;
-    const unresolvedCount = generatedQuestions
-      .slice(0, scopedQuestionCount)
-      .filter((question) => !question.answer.trim()).length;
-    const filledCount = unansweredBeforeGeneration - unresolvedCount;
+      .filter((question) => !question.answer.trim());
 
-    setEditorQuestions(generatedQuestions);
-    setPendingSaveQuestions(generatedQuestions);
-    saveQuizDraft(selectedQuizId, {
-      questions: generatedQuestions
-    });
-
-    if (answerAssistTrigger === 'scan') {
+    if (!unansweredQuestions.length) {
       setShowAnswerAssistModal(false);
       setAnswerAssistStep('select');
-      setPendingSaveQuestions(null);
-      setAnswerAssistQuestionScope(null);
-      setIsSourceScanned(true);
+      return;
+    }
+
+    setIsGeneratingAnswers(true);
+    setPracticeStatus('Generating missing answers with Gemini...');
+    setScanMessage('Generating missing answers with AI...');
+
+    try {
+      const aiAnswers = await generateAnswersWithGemini(
+        unansweredQuestions.map((question) => ({
+          id: question.id,
+          prompt: question.prompt
+        }))
+      );
+      const aiAnswerMap = new Map(
+        aiAnswers
+          .filter((entry) => entry.answer.trim().length > 0)
+          .map((entry) => [entry.id, entry.answer.trim()])
+      );
+      const generatedQuestions = pendingSaveQuestions.map((question, index) => {
+        if (index >= scopedQuestionCount || question.answer.trim()) {
+          return question;
+        }
+
+        return {
+          ...question,
+          answer: aiAnswerMap.get(question.id) || inferAnswerForQuestion(question)
+        };
+      });
+      const unansweredBeforeGeneration = pendingSaveQuestions
+        .slice(0, scopedQuestionCount)
+        .filter((question) => !question.answer.trim()).length;
+      const unresolvedCount = generatedQuestions
+        .slice(0, scopedQuestionCount)
+        .filter((question) => !question.answer.trim()).length;
+      const filledCount = unansweredBeforeGeneration - unresolvedCount;
+
+      setEditorQuestions(generatedQuestions);
+      setPendingSaveQuestions(generatedQuestions);
       saveQuizDraft(selectedQuizId, {
-        questions: generatedQuestions,
-        isSourceScanned: true
+        questions: generatedQuestions
       });
 
-      if (unresolvedCount > 0) {
+      if (answerAssistTrigger === 'scan') {
+        setShowAnswerAssistModal(false);
+        setAnswerAssistStep('select');
+        setPendingSaveQuestions(null);
+        setAnswerAssistQuestionScope(null);
+        setIsSourceScanned(true);
+        saveQuizDraft(selectedQuizId, {
+          questions: generatedQuestions,
+          isSourceScanned: true
+        });
+
+        if (unresolvedCount > 0) {
+          saveQuizDraft(selectedQuizId, {
+            questions: generatedQuestions,
+            isSourceScanned: true,
+            scanMessage: `AI filled ${filledCount} answer${
+              filledCount === 1 ? '' : 's'
+            }, but ${unresolvedCount} still need manual review.`
+          });
+          setScanMessage(
+            `AI filled ${filledCount} answer${
+              filledCount === 1 ? '' : 's'
+            }, but ${unresolvedCount} still need manual review.`
+          );
+          return;
+        }
+
         saveQuizDraft(selectedQuizId, {
           questions: generatedQuestions,
           isSourceScanned: true,
-          scanMessage: `AI filled ${filledCount} answer${
-            filledCount === 1 ? '' : 's'
-          }, but ${unresolvedCount} still need manual review.`
+          scanMessage:
+            'AI filled the missing answers into the Type the correct answer fields. Please review them before saving the quiz.'
         });
+        setScanMessage(
+          'AI filled the missing answers into the Type the correct answer fields. Please review them before saving the quiz.'
+        );
+        return;
+      }
+
+      if (unresolvedCount > 0) {
+        setShowAnswerAssistModal(false);
+        setAnswerAssistStep('select');
         setScanMessage(
           `AI filled ${filledCount} answer${
             filledCount === 1 ? '' : 's'
@@ -1418,29 +1471,16 @@ function Practices() {
         return;
       }
 
-      saveQuizDraft(selectedQuizId, {
-        questions: generatedQuestions,
-        isSourceScanned: true,
-        scanMessage:
-          'AI filled the missing answers into the Type the correct answer fields. Please review them before saving the quiz.'
-      });
-      setScanMessage('AI filled the missing answers into the Type the correct answer fields. Please review them before saving the quiz.');
-      return;
+      setScanMessage('AI generated the missing answers and the quiz was saved.');
+      commitQuizItems(generatedQuestions);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'The AI request failed for an unknown reason.';
+      setPracticeStatus(message);
+      setScanMessage(`AI generation failed: ${message}`);
+    } finally {
+      setIsGeneratingAnswers(false);
     }
-
-    if (unresolvedCount > 0) {
-      setShowAnswerAssistModal(false);
-      setAnswerAssistStep('select');
-      setScanMessage(
-        `AI filled ${filledCount} answer${
-          filledCount === 1 ? '' : 's'
-        }, but ${unresolvedCount} still need manual review.`
-      );
-      return;
-    }
-
-    setScanMessage('AI generated the missing answers and the quiz was saved.');
-    commitQuizItems(generatedQuestions);
   }
 
   function handleSubmitPlayQuestion(event: FormEvent<HTMLFormElement>) {
@@ -2101,7 +2141,7 @@ function Practices() {
               className={`practice-answer-assist-option ${
                 answerAssistMode === 'manual' ? 'active' : ''
               } ${answerAssistTrigger === 'scan' && isScanManualLocked ? 'disabled' : ''}`}
-              disabled={answerAssistTrigger === 'scan' && isScanManualLocked}
+              disabled={isGeneratingAnswers || (answerAssistTrigger === 'scan' && isScanManualLocked)}
               onClick={() => setAnswerAssistMode('manual')}
               type="button"
             >
@@ -2119,6 +2159,7 @@ function Practices() {
               className={`practice-answer-assist-option ${
                 answerAssistMode === 'ai' ? 'active' : ''
               }`}
+              disabled={isGeneratingAnswers}
               onClick={() => setAnswerAssistMode('ai')}
               type="button"
             >
@@ -2138,12 +2179,22 @@ function Practices() {
                 setShowAnswerAssistModal(false);
                 setAnswerAssistStep('select');
               }}
+              disabled={isGeneratingAnswers}
               type="button"
             >
               Cancel
             </button>
-            <button className="practice-submit" onClick={handleConfirmAnswerAssist} type="button">
-              {answerAssistMode === 'ai' ? 'Generate Answers' : 'OK'}
+            <button
+              className="practice-submit"
+              disabled={isGeneratingAnswers}
+              onClick={handleConfirmAnswerAssist}
+              type="button"
+            >
+              {isGeneratingAnswers
+                ? 'Generating...'
+                : answerAssistMode === 'ai'
+                ? 'Generate Answers'
+                : 'OK'}
             </button>
           </div>
         </div>
