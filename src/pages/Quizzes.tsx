@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import Modal from '../components/Modal';
 import { useAuth } from '../context/AuthContext';
+import { useLocalStorage } from '../hooks/useLocalStorage';
 import {
   flattenPracticeTopics,
   getPracticeWorkspace,
@@ -11,14 +12,21 @@ import {
   type PracticeTopicRecord,
   type PracticeWorkspace
 } from '../lib/supabase';
+import {
+  getCorrectChoiceLabel,
+  isPlaceholderQuestion,
+  isQuizReady,
+  parsePromptChoices,
+  type ParsedChoice
+} from '../utils/quizSession';
+import {
+  QUIZ_COMPLETION_STORAGE_KEY,
+  upsertQuizCompletionRecords,
+  type QuizCompletionRecord
+} from '../utils/examEligibility';
 
 const QUIZ_PAGE_SIZE = 5;
 const PASSING_ACCURACY = 75;
-
-type ParsedChoice = {
-  label: string;
-  text: string;
-};
 
 type SessionQuestion = PracticeQuestionRecord & {
   globalIndex: number;
@@ -38,78 +46,6 @@ type QuizResultRecord = {
   score: number;
   total: number;
 };
-
-function isPlaceholderQuestion(prompt: string) {
-  return /^Question\s+\d+$/i.test(prompt.trim());
-}
-
-function isQuizReady(quiz: PracticeQuizRecord) {
-  return (
-    quiz.questions.length > 0 &&
-    quiz.questions.every(
-      (question) =>
-        question.prompt.trim().length > 0 &&
-        !isPlaceholderQuestion(question.prompt) &&
-        question.answer.trim().length > 0
-    )
-  );
-}
-
-function parsePromptChoices(prompt: string, answer: string) {
-  const lines = prompt
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const choices: ParsedChoice[] = [];
-  const stemLines: string[] = [];
-
-  lines.forEach((line, index) => {
-    const normalizedLine = index === 0 ? line.replace(/^\d+\.\s*/, '') : line;
-    const choiceMatch = normalizedLine.match(/^([A-Z])\.\s*(.+)$/);
-
-    if (choiceMatch) {
-      choices.push({
-        label: choiceMatch[1],
-        text: choiceMatch[2]
-      });
-      return;
-    }
-
-    stemLines.push(normalizedLine);
-  });
-
-  if (!choices.length && answer.trim()) {
-    choices.push({
-      label: 'Answer',
-      text: answer.trim()
-    });
-  }
-
-  return {
-    stem: stemLines.join('\n').trim() || prompt.trim(),
-    choices
-  };
-}
-
-function getCorrectChoiceLabel(answer: string, choices: ParsedChoice[]) {
-  const normalizedAnswer = answer.trim().toLowerCase();
-
-  if (!normalizedAnswer) {
-    return '';
-  }
-
-  const labelMatch = normalizedAnswer.match(/^([a-z])(?:\.|\)|\s|$)/);
-  if (labelMatch) {
-    return labelMatch[1].toUpperCase();
-  }
-
-  const exactChoice = choices.find(
-    (choice) => choice.text.trim().toLowerCase() === normalizedAnswer
-  );
-
-  return exactChoice?.label ?? answer.trim();
-}
 
 function buildSessionQuestions(quizzes: PracticeQuizRecord[], topic: PracticeTopicRecord) {
   let questionNumber = 1;
@@ -144,6 +80,10 @@ function buildPerformanceAnalysis(accuracy: number, score: number, total: number
 
 function Quizzes() {
   const { isAuthenticated, user } = useAuth();
+  const [, setQuizCompletionRecords] = useLocalStorage<QuizCompletionRecord[]>(
+    QUIZ_COMPLETION_STORAGE_KEY,
+    []
+  );
   const [workspace, setWorkspace] = useState<PracticeWorkspace | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState('Select a Practice topic to begin building a quiz set.');
@@ -417,6 +357,21 @@ function Quizzes() {
         ...nextResults
       ]);
 
+      if (user.id && selectedTopicRecord) {
+        const completionEntries = nextResults.map((result) => ({
+          completedAt: new Date().toISOString(),
+          questionCount: result.total,
+          quizId: result.quizId,
+          studentId: user.id,
+          topicId: selectedTopicRecord.id,
+          topicTitle: selectedTopicRecord.title
+        }));
+
+        setQuizCompletionRecords((current) =>
+          upsertQuizCompletionRecords(current, completionEntries)
+        );
+      }
+
       if (user.id) {
         void upsertPracticeWorkspace({
           studentAccountId: user.id,
@@ -432,6 +387,21 @@ function Quizzes() {
         ...current.filter((result) => !activeQuizIds.includes(result.quizId)),
         ...nextResults
       ]);
+
+      if (user.id && selectedTopicRecord) {
+        const completionEntries = nextResults.map((result) => ({
+          completedAt: new Date().toISOString(),
+          questionCount: result.total,
+          quizId: result.quizId,
+          studentId: user.id,
+          topicId: selectedTopicRecord.id,
+          topicTitle: selectedTopicRecord.title
+        }));
+
+        setQuizCompletionRecords((current) =>
+          upsertQuizCompletionRecords(current, completionEntries)
+        );
+      }
     }
 
     setSubmittedQuizIds([...activeQuizIds]);

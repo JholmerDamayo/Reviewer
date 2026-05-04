@@ -1552,6 +1552,35 @@ a {
   justify-content: flex-end;
 }
 
+.exam-submit-row {
+  justify-content: flex-start;
+  margin-top: 100px;
+}
+
+.exam-start-button {
+  min-height: 64px;
+  padding: 0 28px;
+  border-radius: 22px;
+  font-size: 1rem;
+  font-weight: 700;
+  width: fit-content;
+  background: linear-gradient(135deg, #0b9a7a, #20c7aa);
+  box-shadow: 0 16px 30px rgba(11, 154, 122, 0.24);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    filter var(--transition-fast);
+}
+
+.exam-start-button:hover {
+  transform: translateY(-2px);
+}
+
+.exam-start-button:disabled {
+  background: linear-gradient(135deg, #9ccfc6, #b8dfd8);
+  box-shadow: none;
+}
+
 .quiz-selection-summary strong {
   display: block;
   margin-bottom: 10px;
@@ -1624,6 +1653,20 @@ a {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 220px));
   gap: 16px;
+}
+
+.exam-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.exam-repeat-note {
+  margin: 0;
+  color: #0b9a7a;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .quiz-score-card {
@@ -3510,6 +3553,7 @@ a {
   .analysis-stat-grid,
   .analysis-chart-grid,
   .analysis-pie-shell,
+  .exam-guide-grid,
   .quiz-selection-top,
   .quiz-session-head {
     grid-template-columns: 1fr;
