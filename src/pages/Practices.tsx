@@ -157,7 +157,8 @@ function normalizeQuestionBlocks(text: string) {
   const normalizedText = text
     .replace(/\r\n?/g, '\n')
     .replace(/\f/g, '\n')
-    .replace(/([^\n])(?:\s{2,}|\t+)(\d+\.\s)/g, '$1\n$2');
+    .replace(/([^\n])(?:\s{2,}|\t+)(\d+\.\s)/g, '$1\n$2')
+    .replace(/([A-Za-z0-9)])\s+(?=\d+\.\s)/g, '$1\n');
 
   const numberedBlocks = Array.from(
     normalizedText.matchAll(/(?:^|\n)\s*(\d+)\.\s*([\s\S]*?)(?=\n\s*\d+\.\s|\s*$)/g)

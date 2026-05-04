@@ -1416,6 +1416,10 @@ a {
   border: 1px solid rgba(123, 141, 112, 0.08);
 }
 
+.lesson-reader-content p {
+  white-space: pre-wrap;
+}
+
 .quiz-builder-shell {
   min-height: calc(100vh - 72px);
   display: grid;
