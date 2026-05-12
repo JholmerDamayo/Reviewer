@@ -78,6 +78,10 @@ function buildPerformanceAnalysis(accuracy: number, score: number, total: number
   return `More review is needed. You answered ${score} out of ${total} correctly and did not reach the passing score yet.`;
 }
 
+function isAnswerSheetQuiz(quiz: PracticeQuizRecord) {
+  return quiz.studyMode !== 'flashcard';
+}
+
 function Quizzes() {
   const { isAuthenticated, user } = useAuth();
   const [, setQuizCompletionRecords] = useLocalStorage<QuizCompletionRecord[]>(
@@ -123,10 +127,14 @@ function Quizzes() {
         if (nextWorkspace) {
           const practiceTopics = normalizePracticeTopics(nextWorkspace);
           const defaultTopic =
-            practiceTopics.find((topic) => topic.quizzes.some(isQuizReady)) ??
+            practiceTopics.find((topic) =>
+              topic.quizzes.some((quiz) => isAnswerSheetQuiz(quiz) && isQuizReady(quiz))
+            ) ??
             practiceTopics[0] ??
             null;
-          const readyQuizzes = defaultTopic?.quizzes.filter(isQuizReady) ?? [];
+          const readyQuizzes =
+            defaultTopic?.quizzes.filter((quiz) => isAnswerSheetQuiz(quiz) && isQuizReady(quiz)) ??
+            [];
 
           setSelectedTopicId(defaultTopic ? String(defaultTopic.id) : '');
           setSelectedQuizCount(String(Math.max(1, Math.min(readyQuizzes.length || 1, 1))));
@@ -167,7 +175,10 @@ function Quizzes() {
   );
   const selectedTopic = selectedTopicRecord?.title ?? '';
   const availableQuizzes = useMemo(
-    () => selectedTopicRecord?.quizzes.filter(isQuizReady) ?? [],
+    () =>
+      selectedTopicRecord?.quizzes.filter(
+        (quiz) => isAnswerSheetQuiz(quiz) && isQuizReady(quiz)
+      ) ?? [],
     [selectedTopicRecord]
   );
   const targetCount = Number(selectedQuizCount);

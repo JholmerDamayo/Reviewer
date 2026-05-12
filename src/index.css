@@ -2708,6 +2708,109 @@ a {
   line-height: 1.3;
 }
 
+.practice-flashcard {
+  position: relative;
+  min-height: 360px;
+  padding: 0;
+  perspective: 1400px;
+  border: 0;
+  background: transparent;
+}
+
+.practice-flashcard::before,
+.practice-flashcard::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  transition: opacity var(--transition-fast);
+}
+
+.practice-flashcard::before {
+  background:
+    radial-gradient(circle at top right, rgba(34, 211, 166, 0.14), transparent 34%),
+    linear-gradient(135deg, #fbfcf9, #eef8f3);
+  border: 1px solid rgba(123, 141, 112, 0.08);
+  box-shadow: 0 24px 40px rgba(117, 125, 96, 0.12);
+}
+
+.practice-flashcard::after {
+  opacity: 0;
+  background:
+    radial-gradient(circle at top left, rgba(244, 186, 93, 0.18), transparent 28%),
+    linear-gradient(145deg, #0b9a7a, #0b5f50);
+  box-shadow: 0 24px 40px rgba(11, 95, 80, 0.24);
+}
+
+.practice-flashcard:hover::before {
+  opacity: 0.92;
+}
+
+.practice-flashcard.is-flipped::after {
+  opacity: 1;
+}
+
+.practice-flashcard-face {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 18px;
+  min-height: 360px;
+  padding: 28px;
+  border-radius: 28px;
+  backface-visibility: hidden;
+  transition: transform 0.65s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.practice-flashcard-front {
+  transform: rotateY(0deg);
+}
+
+.practice-flashcard-back {
+  position: absolute;
+  inset: 0;
+  color: white;
+  transform: rotateY(180deg);
+}
+
+.practice-flashcard.is-flipped .practice-flashcard-front {
+  transform: rotateY(-180deg);
+}
+
+.practice-flashcard.is-flipped .practice-flashcard-back {
+  transform: rotateY(0deg);
+}
+
+.practice-flashcard-face h4 {
+  margin: auto 0;
+}
+
+.practice-flashcard-back .practice-preview-label,
+.practice-flashcard-back h4,
+.practice-flashcard-back p {
+  color: white;
+}
+
+.practice-flashcard-note {
+  margin: 0;
+  color: #667182;
+  line-height: 1.6;
+}
+
+.practice-flashcard-back .practice-flashcard-note {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.practice-flashcard-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.practice-flashcard-summary p {
+  margin: 0;
+}
+
 .practice-choice-list {
   display: grid;
   gap: 14px;

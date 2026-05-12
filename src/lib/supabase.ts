@@ -25,6 +25,7 @@ export type PracticeQuizRecord = {
   id: number;
   topicId?: number;
   topicTitle?: string;
+  studyMode?: 'answer-sheet' | 'flashcard';
   itemCount: number;
   sourceText: string;
   questions: PracticeQuestionRecord[];

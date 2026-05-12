@@ -24,8 +24,11 @@ type QuestionEntry = {
   answer: string;
 };
 
+type PracticeStudyMode = 'answer-sheet' | 'flashcard';
+
 type QuizInstance = {
   id: number;
+  studyMode: PracticeStudyMode;
   itemCount: number;
   sourceText: string;
   questions: QuestionEntry[];
@@ -61,6 +64,8 @@ type AnswerAssistTrigger = 'scan' | 'save';
 type PendingScanSelection = {
   questions: QuestionEntry[];
   totalDetected: number;
+  studyMode: PracticeStudyMode;
+  skippedCount: number;
 };
 type AppliedScanRange = {
   start: number;
@@ -70,6 +75,7 @@ type AppliedScanRange = {
 type ScanMessageTone = 'info' | 'error';
 type ScanRangeModalMode = 'initial' | 'edit';
 type QuizEditorDraft = {
+  studyMode: PracticeStudyMode;
   itemCount: number;
   sourceText: string;
   questions: QuestionEntry[];
@@ -100,6 +106,7 @@ function createQuizInstances(
 
     return {
       id: index + 1,
+      studyMode: previousQuiz?.studyMode ?? 'answer-sheet',
       itemCount: nextCount,
       sourceText: previousQuiz?.sourceText ?? '',
       attempts: previousQuiz?.attempts ?? 0,
@@ -174,6 +181,23 @@ function normalizeQuestionBlocks(text: string) {
     .filter(Boolean);
 }
 
+function normalizeQuestionPrompt(prompt: string) {
+  return prompt
+    .split(/\r?\n/)
+    .map((line, index) => (index === 0 ? line.replace(/^\d+\.\s*/, '') : line).trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function hasMultipleChoiceOptions(prompt: string) {
+  return prompt
+    .split(/\r?\n/)
+    .some((line, index) =>
+      /^[A-Z]\.\s+/.test((index === 0 ? line.replace(/^\d+\.\s*/, '') : line).trim())
+    );
+}
+
 function createQuestionsFromSource(text: string) {
   const lines = text.split(/\r?\n/);
   const answersHeaderIndex = lines.findIndex((line) => /^answers\s*:?$/i.test(line.trim()));
@@ -209,6 +233,7 @@ function createQuestionsFromSource(text: string) {
 
   return {
     totalDetected: questionBlocks.length,
+    skippedCount: 0,
     questions: questionBlocks.map((block, index) => {
       const lines = block
         .split(/\r?\n/)
@@ -232,6 +257,47 @@ function createQuestionsFromSource(text: string) {
         answer: extractedAnswer || answerMap.get(index + 1) || ''
       };
     })
+  };
+}
+
+function createFlashcardsFromSource(text: string) {
+  const questionBlocks = normalizeQuestionBlocks(text);
+  const questions: QuestionEntry[] = [];
+  let skippedCount = 0;
+
+  questionBlocks.forEach((block) => {
+    const lines = block
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const answerLineIndex = lines.findIndex((line) => /^answer\s*[:=]\s*/i.test(line));
+
+    if (answerLineIndex < 0) {
+      skippedCount += 1;
+      return;
+    }
+
+    const answer = lines[answerLineIndex].replace(/^answer\s*[:=]\s*/i, '').trim();
+    const prompt = normalizeQuestionPrompt(
+      lines.filter((_, currentIndex) => currentIndex !== answerLineIndex).join('\n')
+    );
+
+    if (!prompt || !answer || hasMultipleChoiceOptions(prompt)) {
+      skippedCount += 1;
+      return;
+    }
+
+    questions.push({
+      id: questions.length + 1,
+      prompt,
+      answer
+    });
+  });
+
+  return {
+    totalDetected: questions.length,
+    skippedCount,
+    questions
   };
 }
 
@@ -431,6 +497,7 @@ function Practices() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDeleteTopicModal, setShowDeleteTopicModal] = useState(false);
   const [showAnswerAssistModal, setShowAnswerAssistModal] = useState(false);
+  const [showScanTypeModal, setShowScanTypeModal] = useState(false);
   const [showScanRangeModal, setShowScanRangeModal] = useState(false);
   const [practiceTopics, setPracticeTopics] = useState<PracticeTopic[]>(() => [
     createPracticeTopic(1)
@@ -441,13 +508,16 @@ function Practices() {
   const [quizCount, setQuizCount] = useState('5');
   const [selectedQuizId, setSelectedQuizId] = useState(1);
   const [selectedItemCount, setSelectedItemCount] = useState('10');
+  const [editorStudyMode, setEditorStudyMode] = useState<PracticeStudyMode>('answer-sheet');
   const [editorSourceText, setEditorSourceText] = useState('');
   const [editorQuestions, setEditorQuestions] = useState<QuestionEntry[]>(createDefaultQuestions(10));
   const [editorMode, setEditorMode] = useState<'text' | 'file'>('text');
   const [loadedFileName, setLoadedFileName] = useState('');
   const [isSourceScanned, setIsSourceScanned] = useState(false);
   const [isScanManualLocked, setIsScanManualLocked] = useState(false);
-  const [scanMessage, setScanMessage] = useState('Paste questions or upload a PDF, DOC, DOCX, or text file to scan them.');
+  const [scanMessage, setScanMessage] = useState(
+    'Paste questions or upload a PDF, DOC, DOCX, or text file, then click Scan to choose Flashcard or Answer sheets.'
+  );
   const [scanMessageTone, setScanMessageTone] = useState<ScanMessageTone>('info');
   const [saveValidationMessage, setSaveValidationMessage] = useState('');
   const [invalidAnswerQuestionIds, setInvalidAnswerQuestionIds] = useState<number[]>([]);
@@ -464,11 +534,13 @@ function Practices() {
   const [scanStartQuestion, setScanStartQuestion] = useState('1');
   const [appliedScanRange, setAppliedScanRange] = useState<AppliedScanRange | null>(null);
   const [scanRangeModalMode, setScanRangeModalMode] = useState<ScanRangeModalMode>('initial');
+  const [scanSelectionMode, setScanSelectionMode] = useState<PracticeStudyMode>('answer-sheet');
   const [answerAssistMode, setAnswerAssistMode] = useState<AnswerAssistMode>('manual');
   const [answerAssistStep, setAnswerAssistStep] = useState<AnswerAssistStep>('select');
   const [answerAssistTrigger, setAnswerAssistTrigger] = useState<AnswerAssistTrigger>('save');
   const [answerAssistQuestionScope, setAnswerAssistQuestionScope] = useState<number | null>(null);
   const [playQuestionIndex, setPlayQuestionIndex] = useState(0);
+  const [playCardFlipped, setPlayCardFlipped] = useState(false);
   const [playSelectedChoice, setPlaySelectedChoice] = useState('');
   const [playResponses, setPlayResponses] = useState<Record<number, string>>({});
   const [playCompleted, setPlayCompleted] = useState(false);
@@ -493,9 +565,13 @@ function Practices() {
     [quizInstances, selectedQuizId]
   );
   const activePlayQuestion = selectedQuiz?.questions[playQuestionIndex] ?? null;
+  const isFlashcardQuiz = selectedQuiz?.studyMode === 'flashcard';
   const parsedPlayQuestion = activePlayQuestion
     ? parsePromptChoices(activePlayQuestion.prompt, activePlayQuestion.answer)
     : null;
+  const flashcardPrompt = activePlayQuestion
+    ? normalizeQuestionPrompt(activePlayQuestion.prompt)
+    : '';
   const answerAssistQuestions = pendingSaveQuestions?.slice(
     0,
     answerAssistTrigger === 'scan'
@@ -753,6 +829,7 @@ function Practices() {
   function buildQuizDraft(overrides: Partial<QuizEditorDraft> = {}): QuizEditorDraft {
     return {
       itemCount: Number(selectedItemCount),
+      studyMode: editorStudyMode,
       sourceText: editorSourceText,
       questions: editorQuestions,
       editorMode,
@@ -821,6 +898,7 @@ function Practices() {
 
     setSelectedQuizId(quizId);
     setSelectedItemCount(String(nextQuestionCount));
+    setEditorStudyMode(draft?.studyMode ?? quiz?.studyMode ?? 'answer-sheet');
     setEditorSourceText(draft?.sourceText ?? quiz?.sourceText ?? '');
     setEditorQuestions(nextDraftQuestions);
     setLoadedFileName(draft?.loadedFileName ?? '');
@@ -832,9 +910,10 @@ function Practices() {
     setEditorMode(draft?.editorMode ?? 'text');
     setScanMessage(
       draft?.scanMessage ??
-        'Paste questions or upload a PDF, DOC, DOCX, or text file to scan them.'
+        'Paste questions or upload a PDF, DOC, DOCX, or text file, then click Scan to choose Flashcard or Answer sheets.'
     );
     setScanMessageTone(draft?.scanMessageTone ?? 'info');
+    setScanSelectionMode(draft?.studyMode ?? quiz?.studyMode ?? 'answer-sheet');
     setShowQuestionCountModal(false);
     setShowPlayModal(false);
     setOpenQuizMenuId(null);
@@ -844,6 +923,7 @@ function Practices() {
   function openQuizPlayer(quizId: number) {
     setSelectedQuizId(quizId);
     setPlayQuestionIndex(0);
+    setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses({});
     setPlayCompleted(false);
@@ -862,7 +942,7 @@ function Practices() {
       return;
     }
 
-    if (quiz.attempts > 0) {
+    if (quiz.studyMode !== 'flashcard' && quiz.attempts > 0) {
       openQuizResultSummary(quiz.id);
       return;
     }
@@ -966,6 +1046,7 @@ function Practices() {
 
     setSelectedQuizId(quizId);
     setPlayQuestionIndex(0);
+    setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses(quiz.lastResponses ?? {});
     setPlayCompleted(true);
@@ -1009,8 +1090,13 @@ function Practices() {
     totalDetected: number,
     limit: number,
     startQuestionNumber: number,
-    showAnswerAssistOnMissing = true
+    options: {
+      showAnswerAssistOnMissing?: boolean;
+      skippedCount?: number;
+      studyMode: PracticeStudyMode;
+    }
   ) {
+    const { showAnswerAssistOnMissing = true, skippedCount = 0, studyMode } = options;
     const shouldLockManualChoice = isSourceScanned && isScanManualLocked;
     const nextQuestions = buildScannedQuestionDrafts(limit, parsedQuestions, editorQuestions);
     const endQuestionNumber = startQuestionNumber + parsedQuestions.length - 1;
@@ -1020,6 +1106,7 @@ function Practices() {
     const detectedAnswersCount = parsedQuestions.length - missingAnswersCount;
 
     setEditorQuestions(nextQuestions);
+    setEditorStudyMode(studyMode);
     setIsSourceScanned(true);
     setAppliedScanRange(
       totalDetected > limit
@@ -1031,6 +1118,7 @@ function Practices() {
         : null
     );
     saveQuizDraft(selectedQuizId, {
+      studyMode,
       itemCount: limit,
       questions: nextQuestions,
       isSourceScanned: true,
@@ -1044,6 +1132,15 @@ function Practices() {
           : null
     });
 
+    const sourceLabel =
+      editorMode === 'file' && loadedFileName ? loadedFileName : 'the text input';
+    const skippedMessage =
+      studyMode === 'flashcard' && skippedCount > 0
+        ? ` ${skippedCount} item${
+            skippedCount === 1 ? ' was' : 's were'
+          } skipped because only question-and-answer flashcards are allowed.`
+        : '';
+
     if (missingAnswersCount > 0 && showAnswerAssistOnMissing) {
       setPendingSaveQuestions(nextQuestions);
       setAnswerAssistMode(shouldLockManualChoice ? 'ai' : 'manual');
@@ -1054,15 +1151,11 @@ function Practices() {
       showScanMessage(
         `Scanned ${parsedQuestions.length} question${
           parsedQuestions.length === 1 ? '' : 's'
-        } from question ${startQuestionNumber} to ${
-          endQuestionNumber
-        } in ${editorMode === 'file' && loadedFileName ? loadedFileName : 'the text input'}${
-          totalDetected > limit ? '.' : '.'
-        } ${
+        } from question ${startQuestionNumber} to ${endQuestionNumber} in ${sourceLabel}. ${
           detectedAnswersCount > 0
             ? `${detectedAnswersCount} answer${detectedAnswersCount === 1 ? ' was' : 's were'} found automatically.`
             : 'No answers were found in the source.'
-        }`
+        }${skippedMessage}`
       );
       return;
     }
@@ -1080,18 +1173,27 @@ function Practices() {
       return;
     }
 
+    if (studyMode === 'flashcard') {
+      showScanMessage(
+        `Scanned ${parsedQuestions.length} flashcard${
+          parsedQuestions.length === 1 ? '' : 's'
+        } from question ${startQuestionNumber} to ${endQuestionNumber} in ${sourceLabel}.${skippedMessage}`
+      );
+      return;
+    }
+
     showScanMessage(
       `Scanned ${parsedQuestions.length} question${
         parsedQuestions.length === 1 ? '' : 's'
-      } from question ${startQuestionNumber} to ${
-        endQuestionNumber
-      } in ${editorMode === 'file' && loadedFileName ? loadedFileName : 'the text input'} and filled the answers automatically.`
+      } from question ${startQuestionNumber} to ${endQuestionNumber} in ${sourceLabel} and filled the answers automatically.`
     );
   }
 
   function openScanRangeSelection(
     parsedQuestions: QuestionEntry[],
     totalDetected: number,
+    studyMode: PracticeStudyMode,
+    skippedCount: number,
     preferredStartQuestion = 1,
     mode: ScanRangeModalMode = 'initial'
   ) {
@@ -1101,7 +1203,9 @@ function Practices() {
 
     setPendingScanSelection({
       questions: parsedQuestions,
-      totalDetected
+      totalDetected,
+      studyMode,
+      skippedCount
     });
     setScanRangeModalMode(mode);
     setScanStartQuestion(String(nextStartQuestion));
@@ -1135,34 +1239,68 @@ function Practices() {
       return;
     }
 
+    setScanSelectionMode(editorStudyMode);
+    setShowScanTypeModal(true);
+  }
+
+  function handleConfirmScanType() {
+    setShowScanTypeModal(false);
+
     const limit = Number(selectedItemCount);
-    const { questions: parsedQuestions, totalDetected } = createQuestionsFromSource(editorSourceText);
+    const parsedSource =
+      scanSelectionMode === 'flashcard'
+        ? createFlashcardsFromSource(editorSourceText)
+        : createQuestionsFromSource(editorSourceText);
+    const { questions: parsedQuestions, skippedCount, totalDetected } = parsedSource;
 
     if (!parsedQuestions.length) {
       showScanMessage(
-        'No questions were detected. Try numbered questions like 1. 2. 3.',
+        scanSelectionMode === 'flashcard'
+          ? 'No flashcards were detected. Use numbered questions with an Answer: line. Multiple-choice items are skipped.'
+          : 'No questions were detected. Try numbered questions like 1. 2. 3.',
         'error'
       );
       return;
     }
 
     if (totalDetected > limit) {
-      openScanRangeSelection(parsedQuestions, totalDetected, appliedScanRange?.start ?? 1, 'initial');
+      openScanRangeSelection(
+        parsedQuestions,
+        totalDetected,
+        scanSelectionMode,
+        skippedCount,
+        appliedScanRange?.start ?? 1,
+        'initial'
+      );
       return;
     }
 
-    applyScannedQuestions(parsedQuestions.slice(0, limit), totalDetected, limit, 1);
+    applyScannedQuestions(parsedQuestions.slice(0, limit), totalDetected, limit, 1, {
+      skippedCount,
+      studyMode: scanSelectionMode
+    });
   }
 
   function handleEditScanRange() {
     const limit = Number(selectedItemCount);
-    const { questions: parsedQuestions, totalDetected } = createQuestionsFromSource(editorSourceText);
+    const parsedSource =
+      editorStudyMode === 'flashcard'
+        ? createFlashcardsFromSource(editorSourceText)
+        : createQuestionsFromSource(editorSourceText);
+    const { questions: parsedQuestions, skippedCount, totalDetected } = parsedSource;
 
     if (!parsedQuestions.length || totalDetected <= limit) {
       return;
     }
 
-    openScanRangeSelection(parsedQuestions, totalDetected, appliedScanRange?.start ?? 1, 'edit');
+    openScanRangeSelection(
+      parsedQuestions,
+      totalDetected,
+      editorStudyMode,
+      skippedCount,
+      appliedScanRange?.start ?? 1,
+      'edit'
+    );
   }
 
   function handleConfirmScanRange() {
@@ -1187,7 +1325,11 @@ function Practices() {
       pendingScanSelection.totalDetected,
       limit,
       startQuestionNumber,
-      shouldOpenAnswerAssist
+      {
+        showAnswerAssistOnMissing: shouldOpenAnswerAssist,
+        skippedCount: pendingScanSelection.skippedCount,
+        studyMode: pendingScanSelection.studyMode
+      }
     );
   }
 
@@ -1254,11 +1396,11 @@ function Practices() {
         isScanManualLocked: false,
         appliedScanRange: null,
         ...createScanMessageDraft(
-          `${file.name} (${extracted.sourceLabel}) is ready. Click Scan to check for answers and fill the question cards.`
+          `${file.name} (${extracted.sourceLabel}) is ready. Click Scan to choose Flashcard or Answer sheets.`
         )
       });
       showScanMessage(
-        `${file.name} (${extracted.sourceLabel}) is ready. Click Scan to check for answers and fill the question cards.`
+        `${file.name} (${extracted.sourceLabel}) is ready. Click Scan to choose Flashcard or Answer sheets.`
       );
     } catch {
       showScanMessage(
@@ -1321,6 +1463,7 @@ function Practices() {
       quiz.id === selectedQuizId
         ? {
             ...quiz,
+            studyMode: editorStudyMode,
             itemCount: nextQuestions.length,
             sourceText: editorSourceText,
             questions: nextQuestions.length
@@ -1589,6 +1732,7 @@ function Practices() {
 
   function handleRestartQuiz() {
     setPlayQuestionIndex(0);
+    setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses({});
     setPlayCompleted(false);
@@ -1597,6 +1741,30 @@ function Practices() {
   }
 
   const currentQuestionCount = editorQuestions.length;
+
+  function handleFlipFlashcard() {
+    setPlayCardFlipped((current) => !current);
+  }
+
+  function handlePreviousFlashcard() {
+    setPlayQuestionIndex((current) => Math.max(current - 1, 0));
+    setPlayCardFlipped(false);
+  }
+
+  function handleNextFlashcard() {
+    if (!selectedQuiz) {
+      return;
+    }
+
+    if (playQuestionIndex >= selectedQuiz.questions.length - 1) {
+      setPlayCompleted(true);
+      setPlayCardFlipped(false);
+      return;
+    }
+
+    setPlayQuestionIndex((current) => current + 1);
+    setPlayCardFlipped(false);
+  }
 
   return (
     <>
@@ -1910,17 +2078,19 @@ function Practices() {
             <p className="practice-quiz-overview-copy">
               {quizDrafts[getDraftKey(selectedTopicId, selectedQuiz.id)]
                 ? 'A saved draft already exists for this quiz. Continue editing to keep building from where you left off.'
-                : selectedQuiz.attempts > 0
+                : selectedQuiz.studyMode !== 'flashcard' && selectedQuiz.attempts > 0
                 ? `This quiz has ${selectedQuiz.attempts} saved attempt${
                     selectedQuiz.attempts === 1 ? '' : 's'
                   } and can open directly to the result summary.`
                 : hasSavedQuizContent(selectedQuiz)
-                ? 'This quiz already has saved questions and answers, so it is ready to play or edit.'
+                ? selectedQuiz.studyMode === 'flashcard'
+                  ? 'This quiz is saved as a flashcard deck, so it is ready to open and flip through.'
+                  : 'This quiz already has saved questions and answers, so it is ready to play or edit.'
                 : 'This quiz is still empty. Open the setup flow to choose the question count and start building it.'}
             </p>
 
             <div className="practice-quiz-overview-actions">
-              {selectedQuiz.attempts > 0 ? (
+              {selectedQuiz.studyMode !== 'flashcard' && selectedQuiz.attempts > 0 ? (
                 <>
                   <button
                     className="practice-quiz-overview-link"
@@ -1959,7 +2129,9 @@ function Practices() {
                     {quizDrafts[getDraftKey(selectedTopicId, selectedQuiz.id)]
                       ? 'Continue Editing'
                       : hasSavedQuizContent(selectedQuiz)
-                      ? 'Open Quiz'
+                      ? selectedQuiz.studyMode === 'flashcard'
+                        ? 'Open Flashcards'
+                        : 'Open Quiz'
                       : 'Start Setup'}
                   </button>
                 </>
@@ -2087,6 +2259,58 @@ function Practices() {
               type="button"
             >
               Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={showScanTypeModal}
+        backdropClassName="modal-backdrop-front"
+        title="Choose Scan Type"
+        onClose={() => setShowScanTypeModal(false)}
+      >
+        <div className="practice-answer-assist-shell">
+          <p className="practice-answer-assist-copy">
+            Choose how the scanned content should be used. Flashcard only accepts numbered
+            question-and-answer items with an <strong>Answer:</strong> line, and multiple-choice
+            items will be skipped.
+          </p>
+
+          <div className="practice-answer-assist-options">
+            <button
+              className={`practice-answer-assist-option ${
+                scanSelectionMode === 'flashcard' ? 'active' : ''
+              }`}
+              onClick={() => setScanSelectionMode('flashcard')}
+              type="button"
+            >
+              <span>Flashcard</span>
+              <small>Build a flip-card deck where the question is on the front and the answer is on the back.</small>
+            </button>
+
+            <button
+              className={`practice-answer-assist-option ${
+                scanSelectionMode === 'answer-sheet' ? 'active' : ''
+              }`}
+              onClick={() => setScanSelectionMode('answer-sheet')}
+              type="button"
+            >
+              <span>Answer sheets</span>
+              <small>Keep the current quiz builder flow for questionnaires and answer checking.</small>
+            </button>
+          </div>
+
+          <div className="practice-answer-assist-actions">
+            <button
+              className="practice-cancel-button"
+              onClick={() => setShowScanTypeModal(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button className="practice-submit" onClick={handleConfirmScanType} type="button">
+              Okay
             </button>
           </div>
         </div>
@@ -2413,12 +2637,96 @@ function Practices() {
 
       <Modal
         open={showPlayModal}
-        title={selectedQuiz ? `${savedTitle} ${selectedQuiz.id}` : 'Quiz Player'}
+        title={
+          selectedQuiz
+            ? `${savedTitle} ${selectedQuiz.id}${selectedQuiz.studyMode === 'flashcard' ? ' Flashcards' : ''}`
+            : 'Quiz Player'
+        }
         onClose={() => setShowPlayModal(false)}
       >
         {selectedQuiz && (
           <div className="practice-play-shell">
-            {!playCompleted && activePlayQuestion && parsedPlayQuestion ? (
+            {isFlashcardQuiz ? (
+              !playCompleted && activePlayQuestion ? (
+                <div className="practice-play-form">
+                  <div className="practice-play-head">
+                    <div>
+                      <div className="practice-preview-label">Flashcard Progress</div>
+                      <strong>
+                        Card {playQuestionIndex + 1} of {selectedQuiz.questions.length}
+                      </strong>
+                    </div>
+                    <button
+                      className="practice-secondary-button"
+                      onClick={() => openQuizCountStep(selectedQuiz.id)}
+                      type="button"
+                    >
+                      Edit Quiz Content
+                    </button>
+                  </div>
+
+                  <button
+                    className={`practice-flashcard ${playCardFlipped ? 'is-flipped' : ''}`}
+                    onClick={handleFlipFlashcard}
+                    type="button"
+                  >
+                    <div className="practice-flashcard-face practice-flashcard-front">
+                      <span className="practice-preview-label">Front</span>
+                      <h4>{flashcardPrompt || activePlayQuestion.prompt}</h4>
+                      <p className="practice-flashcard-note">Click the card to flip and reveal the answer.</p>
+                    </div>
+                    <div className="practice-flashcard-face practice-flashcard-back">
+                      <span className="practice-preview-label">Back</span>
+                      <h4>{activePlayQuestion.answer}</h4>
+                      <p className="practice-flashcard-note">Click again if you want to flip back to the question.</p>
+                    </div>
+                  </button>
+
+                  <div className="practice-flashcard-actions">
+                    <button
+                      className="practice-secondary-button"
+                      disabled={playQuestionIndex === 0}
+                      onClick={handlePreviousFlashcard}
+                      type="button"
+                    >
+                      Previous
+                    </button>
+                    <button className="practice-submit" onClick={handleNextFlashcard} type="button">
+                      {playQuestionIndex === selectedQuiz.questions.length - 1
+                        ? 'Finish Deck'
+                        : 'Next Card'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="practice-results-shell">
+                  <div className="practice-play-head">
+                    <div>
+                      <div className="practice-preview-label">Flashcard Complete</div>
+                      <strong>{selectedQuiz.questions.length} cards reviewed</strong>
+                    </div>
+                  </div>
+
+                  <div className="practice-play-card practice-flashcard-summary">
+                    <h4>Deck finished</h4>
+                    <p>You can restart this flashcard deck anytime and flip through the cards again.</p>
+                  </div>
+
+                  <div className="practice-results-actions">
+                    <button
+                      className="practice-secondary-button practice-results-close"
+                      onClick={() => setShowPlayModal(false)}
+                      type="button"
+                    >
+                      Close
+                    </button>
+                    <button className="practice-submit" onClick={handleRestartQuiz} type="button">
+                      Restart Deck
+                    </button>
+                  </div>
+                </div>
+              )
+            ) : !playCompleted && activePlayQuestion && parsedPlayQuestion ? (
               <form className="practice-play-form" onSubmit={handleSubmitPlayQuestion}>
                 <div className="practice-play-head">
                   <div>

@@ -37,7 +37,7 @@ type ExamResult = {
 };
 
 function isCompletedQuiz(quiz: PracticeQuizRecord) {
-  return isQuizReady(quiz) && quiz.attempts > 0;
+  return quiz.studyMode !== 'flashcard' && isQuizReady(quiz) && quiz.attempts > 0;
 }
 
 function getUsableQuestionCount(quiz: PracticeQuizRecord) {
