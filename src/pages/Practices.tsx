@@ -96,6 +96,33 @@ function createDefaultQuestions(count: number) {
   }));
 }
 
+function buildSequentialQuestionOrder(count: number) {
+  return Array.from({ length: count }, (_, index) => index);
+}
+
+function shuffleQuestionOrder(order: number[]) {
+  const nextOrder = [...order];
+
+  for (let index = nextOrder.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [nextOrder[index], nextOrder[swapIndex]] = [nextOrder[swapIndex], nextOrder[index]];
+  }
+
+  return nextOrder;
+}
+
+function getFlashcardQuestionOrder(
+  quiz: QuizInstance | null | undefined,
+  shouldShuffle = false
+) {
+  if (!quiz || quiz.studyMode !== 'flashcard') {
+    return [];
+  }
+
+  const defaultOrder = buildSequentialQuestionOrder(quiz.questions.length);
+  return shouldShuffle ? shuffleQuestionOrder(defaultOrder) : defaultOrder;
+}
+
 function createQuizInstances(
   count: number,
   previous: Array<Partial<QuizInstance>> = []
@@ -540,6 +567,7 @@ function Practices() {
   const [answerAssistTrigger, setAnswerAssistTrigger] = useState<AnswerAssistTrigger>('save');
   const [answerAssistQuestionScope, setAnswerAssistQuestionScope] = useState<number | null>(null);
   const [playQuestionIndex, setPlayQuestionIndex] = useState(0);
+  const [playFlashcardOrder, setPlayFlashcardOrder] = useState<number[]>([]);
   const [playCardFlipped, setPlayCardFlipped] = useState(false);
   const [playSelectedChoice, setPlaySelectedChoice] = useState('');
   const [playResponses, setPlayResponses] = useState<Record<number, string>>({});
@@ -564,14 +592,31 @@ function Practices() {
     () => quizInstances.find((quiz) => quiz.id === selectedQuizId) ?? null,
     [quizInstances, selectedQuizId]
   );
-  const activePlayQuestion = selectedQuiz?.questions[playQuestionIndex] ?? null;
   const isFlashcardQuiz = selectedQuiz?.studyMode === 'flashcard';
+  const flashcardQuestions = useMemo(() => {
+    if (!selectedQuiz || selectedQuiz.studyMode !== 'flashcard') {
+      return [];
+    }
+
+    const questionOrder =
+      playFlashcardOrder.length === selectedQuiz.questions.length
+        ? playFlashcardOrder
+        : getFlashcardQuestionOrder(selectedQuiz);
+
+    return questionOrder
+      .map((questionIndex) => selectedQuiz.questions[questionIndex])
+      .filter((question): question is QuestionEntry => Boolean(question));
+  }, [playFlashcardOrder, selectedQuiz]);
+  const activePlayQuestion = isFlashcardQuiz
+    ? flashcardQuestions[playQuestionIndex] ?? null
+    : selectedQuiz?.questions[playQuestionIndex] ?? null;
   const parsedPlayQuestion = activePlayQuestion
     ? parsePromptChoices(activePlayQuestion.prompt, activePlayQuestion.answer)
     : null;
   const flashcardPrompt = activePlayQuestion
     ? normalizeQuestionPrompt(activePlayQuestion.prompt)
     : '';
+  const flashcardCount = flashcardQuestions.length;
   const answerAssistQuestions = pendingSaveQuestions?.slice(
     0,
     answerAssistTrigger === 'scan'
@@ -921,8 +966,11 @@ function Practices() {
   }
 
   function openQuizPlayer(quizId: number) {
+    const quiz = quizInstances.find((entry) => entry.id === quizId);
+
     setSelectedQuizId(quizId);
     setPlayQuestionIndex(0);
+    setPlayFlashcardOrder(getFlashcardQuestionOrder(quiz));
     setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses({});
@@ -1046,6 +1094,7 @@ function Practices() {
 
     setSelectedQuizId(quizId);
     setPlayQuestionIndex(0);
+    setPlayFlashcardOrder(getFlashcardQuestionOrder(quiz));
     setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses(quiz.lastResponses ?? {});
@@ -1732,6 +1781,9 @@ function Practices() {
 
   function handleRestartQuiz() {
     setPlayQuestionIndex(0);
+    setPlayFlashcardOrder((current) =>
+      current.length ? current : getFlashcardQuestionOrder(selectedQuiz)
+    );
     setPlayCardFlipped(false);
     setPlaySelectedChoice('');
     setPlayResponses({});
@@ -1751,12 +1803,25 @@ function Practices() {
     setPlayCardFlipped(false);
   }
 
-  function handleNextFlashcard() {
-    if (!selectedQuiz) {
+  function handleShuffleFlashcards() {
+    if (!selectedQuiz || selectedQuiz.studyMode !== 'flashcard') {
       return;
     }
 
-    if (playQuestionIndex >= selectedQuiz.questions.length - 1) {
+    setPlayFlashcardOrder(getFlashcardQuestionOrder(selectedQuiz, true));
+    setPlayQuestionIndex(0);
+    setPlayCardFlipped(false);
+    setPlayCompleted(false);
+    setPlayResult(null);
+    setShowResultReview(false);
+  }
+
+  function handleNextFlashcard() {
+    if (!selectedQuiz || !flashcardCount) {
+      return;
+    }
+
+    if (playQuestionIndex >= flashcardCount - 1) {
       setPlayCompleted(true);
       setPlayCardFlipped(false);
       return;
@@ -2653,7 +2718,7 @@ function Practices() {
                     <div>
                       <div className="practice-preview-label">Flashcard Progress</div>
                       <strong>
-                        Card {playQuestionIndex + 1} of {selectedQuiz.questions.length}
+                        Card {playQuestionIndex + 1} of {flashcardCount}
                       </strong>
                     </div>
                     <button
@@ -2691,8 +2756,49 @@ function Practices() {
                     >
                       Previous
                     </button>
+                    <button
+                      aria-label="Shuffle flashcards and restart from the first card"
+                      className="practice-secondary-button practice-flashcard-shuffle"
+                      onClick={handleShuffleFlashcards}
+                      type="button"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path
+                          d="M16 4h4v4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                        <path
+                          d="M4 7h6l7 10h3"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                        <path
+                          d="M16 20h4v-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                        <path
+                          d="M4 17h6l2-3"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </button>
                     <button className="practice-submit" onClick={handleNextFlashcard} type="button">
-                      {playQuestionIndex === selectedQuiz.questions.length - 1
+                      {playQuestionIndex === flashcardCount - 1
                         ? 'Finish Deck'
                         : 'Next Card'}
                     </button>
@@ -2703,7 +2809,7 @@ function Practices() {
                   <div className="practice-play-head">
                     <div>
                       <div className="practice-preview-label">Flashcard Complete</div>
-                      <strong>{selectedQuiz.questions.length} cards reviewed</strong>
+                      <strong>{flashcardCount} cards reviewed</strong>
                     </div>
                   </div>
 
